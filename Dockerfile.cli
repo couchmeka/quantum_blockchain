@@ -1,0 +1,72 @@
+FROM --platform=linux/arm64 hyperledger/fabric-tools:latest
+
+# Install build dependencies and Python
+RUN apt-get update && \
+    apt-get install -y \
+    wget \
+    python3 \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    cmake \
+    git \
+    gcc-aarch64-linux-gnu \
+    binutils-aarch64-linux-gnu \
+    binutils \
+    qemu-user \
+    qemu-user-static \
+    ninja-build \
+    libblas-dev \
+    liblapack-dev \
+    libssl-dev \
+    openssl \
+    libcrypto++-dev
+
+# Install specific Go version (1.21)
+RUN wget https://go.dev/dl/go1.21.5.linux-arm64.tar.gz && \
+    tar -C /usr/local -xzf go1.21.5.linux-arm64.tar.gz && \
+    rm go1.21.5.linux-arm64.tar.gz
+
+# Install Python packages
+RUN pip3 install \
+    ephem \
+    pyyaml \
+    cryptography \
+    pathlib \
+    typing-extensions \
+    numpy \
+    requests \
+    qiskit \
+    qiskit-aer \
+    qiskit-ibm-runtime \
+    qiskit-algorithms \
+    qiskit-optimization
+
+# Set environment variables
+ENV GOPATH=/opt/gopath
+ENV PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
+ENV PYTHONPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer:/opt/gopath/src/github.com/hyperledger/fabric/peer/sip_connect
+ENV LD_LIBRARY_PATH=/opt/gopath/src/github.com/hyperledger/fabric/peer/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64:/opt/gopath/src/github.com/hyperledger/fabric/peer/sip_connect/kyber/ref
+
+# Copy your quantum code to fabric peer directory
+COPY sip_connect /opt/gopath/src/github.com/hyperledger/fabric/peer/sip_connect/
+COPY quantum_cryptogen.py /opt/gopath/src/github.com/hyperledger/fabric/peer/
+
+# Build Falcon and Kyber
+RUN cd /opt/gopath/src/github.com/hyperledger/fabric/peer/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64 && \
+    make clean && \
+    make VERBOSE=1
+
+RUN cd /opt/gopath/src/github.com/hyperledger/fabric/peer/sip_connect/kyber/ref && \
+    make clean && \
+    make VERBOSE=1
+
+WORKDIR /opt/gopath/src/github.com/hyperledger/fabric/peer
+
+# Add initialization script
+COPY init-quantum.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/init-quantum.sh
+
+# Set as entrypoint
+ENTRYPOINT ["/usr/local/bin/init-quantum.sh"]
+CMD ["/bin/bash"]

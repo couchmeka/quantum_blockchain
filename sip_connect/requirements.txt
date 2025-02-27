@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+websockets
+qiskit
+cryptography
+pycryptodome
+ephem
+requests
+# Other dependencies from your quantum implementation
+numpy
+pandas
+python-multipart
+paho-mqtt
+

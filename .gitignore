@@ -1,0 +1,121 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env
+.venv
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Distribution / packaging
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+out/
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Project-specific
+logs/
+*.log
+quantum_crypto.log
+hedera_bridge.log
+sip_trace.log
+quantum_services_detailed.log
+quantum_mqtt.log
+quantum_srtp.log
+quantum_msp_init.log
+
+# Hyperledger and blockchain data
+blockchain_data/
+crypto-config/
+wallet-keys/
+wallet-logs/
+keys/
+certificates/
+
+# Generated files and folders
+minio-data/
+timescaledb-data/
+mosquitto/data/
+mosquitto/log/
+couchdb/
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Secrets
+*.pem
+*.key
+*.crt
+*.p12
+
+# Docker
+.dockerignore
+.docker/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# OS-specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

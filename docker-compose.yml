@@ -1,0 +1,776 @@
+x-quantum-service-config: &quantum-service-config
+  build: .
+  deploy:
+    resources:
+      limits:
+        cpus: '2'
+        memory: 2G
+    restart_policy:
+      condition: on-failure
+      delay: 5s
+      max_attempts: 3
+  volumes:
+    - ./quantum_srtp:/app/quantum_srtp
+    - ./quantum_mqtt:/app/quantum_mqtt
+    - ./sip_connect:/app/sip_connect
+    - ./sip_connect/kyber:/app/sip_connect/kyber
+    - ./sip_connect/PQClean/crypto_sign/falcon-1024/aarch64:/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64
+    - ./keys:/app/keys
+    - ./logs:/app/logs
+    - ./certificates:/app/certificates
+  environment:
+    - PYTHONPATH=/app:/app/sip_connect/kyber:/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64
+    - LD_LIBRARY_PATH=/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64:/app/sip_connect/kyber/ref
+    - ORG_ID=Hospital_A
+    - QUANTUM_COMPUTE_THREADS=4
+
+services:
+  quantum_sip:
+    <<: *quantum-service-config
+    healthcheck:
+      test: [ "CMD-SHELL", "python3 -c 'import urllib.request; print(\"Attempting health check\"); urllib.request.urlopen(\"http://localhost:8000\"); print(\"Health check successful\")' || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+        resources:
+          limits:
+            cpus: '2'
+            memory: 2G
+          reservations:
+            cpus: '1'
+            memory: 1G
+        restart_policy:
+          condition: on-failure
+          delay: 10s
+          max_attempts: 5
+    depends_on:
+        couchdb:
+          condition: service_healthy
+        minio:
+          condition: service_healthy
+        mqtt:
+          condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./sip_connect:/app/sip_connect
+      - ./quantum_msp_init.py:/app/quantum_msp_init.py
+      - ./certificates:/app/certificates
+      - ./sip_connect/tls:/app/sip_connect/tls
+      - ./sip_connect/kyber:/app/sip_connect/kyber
+      - ./sip_connect/kyber/ref:/app/sip_connect/kyber/ref
+      - ./certificates/Hospital_A_ca.pem:/app/certificates/tls/ca.pem
+      - ./certificates/Hospital_A_Secure_Communications_certificate.pem:/app/certificates/tls/cert.pem
+      - ./certificates/Hospital_A_Secure_Communications_private_key.pem:/app/certificates/tls/key.pem
+    environment:
+      - PYTHONPATH=/app:/app/sip_connect/kyber:/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64
+      - LD_LIBRARY_PATH=/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64:/app/sip_connect/kyber/ref
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - QUANTUM_BATCH_SIZE=1000
+      # Add MQTT-related environment variables
+      - MQTT_BROKER_HOST=mqtt
+      - MQTT_BROKER_PORT=1883
+    command: python quantum_services_init.py
+
+  asterisk:
+      security_opt:
+        - no-new-privileges:true
+      ulimits:
+        nproc: 65535
+        nofile:
+          soft: 65535
+          hard: 65535
+      deploy:
+        resources:
+          limits:
+            cpus: '2'
+            memory: 2G
+          reservations:
+            cpus: '1'
+            memory: 1G
+        restart_policy:
+          condition: on-failure
+          delay: 5s
+          max_attempts: 2
+      healthcheck:
+        test: [ "CMD-SHELL", "asterisk -rx 'core show version' || exit 1" ]
+        interval: 30s
+        timeout: 10s
+        retries: 5
+        start_period: 60s
+      build:
+        context: .
+        dockerfile: Dockerfile.asterisk
+        args:
+          - QUANTUM_MODULE_PATH=/usr/src/asterisk_modules/res_quantum
+          - PYTHON_VERSION=3.9
+      platform: linux/arm64
+      ports:
+        - "5060:5060/udp"
+        - "8088:8088"
+        - "8089:8089"
+        - "5061:5061/tcp"
+        - "5062:5062/tcp"
+        - "10000-20000:10000-20000/udp"
+      volumes:
+        - ./configs/asterisk/asterisk.conf:/etc/asterisk/asterisk.conf
+        - ./configs/asterisk/extensions.conf:/etc/asterisk/extensions.conf
+        - ./configs/asterisk/features.conf:/etc/asterisk/features.conf
+        - ./configs/asterisk/http.conf:/etc/asterisk/http.conf
+        - ./configs/asterisk/logger.conf:/etc/asterisk/logger.conf
+        - ./configs/asterisk/manager.conf:/etc/asterisk/manager.conf
+        - ./configs/asterisk/modules.conf:/etc/asterisk/modules.conf
+        - ./configs/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf
+        - ./configs/asterisk/quantum.conf:/etc/asterisk/quantum.conf
+        - ./configs/asterisk/queues.conf:/etc/asterisk/queues.conf
+        - ./configs/asterisk/rtp.conf:/etc/asterisk/rtp.conf
+        - ./configs/asterisk/sip.conf:/etc/asterisk/sip.conf
+        - ./asterisk_modules/res_quantum:/usr/src/asterisk_modules/res_quantum  # Already exists
+        - ./sip_connect:/app/sip_connect
+        - ./quantum_srtp:/app/quantum_srtp
+        - ./keys:/etc/asterisk/keys
+        - ./certificates:/etc/asterisk/certs
+      environment:
+        - PYTHONPATH=/app:/app/sip_connect/kyber:/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64
+        - LD_LIBRARY_PATH=/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64:/app/sip_connect/kyber/ref
+        - ASTERISK_SIP_SECRET=VISUALintelligence20**
+        - ASTERISK_ORG_ID=Hospital_A
+        - QUANTUM_ENHANCED_SRTP=true
+        - KYBER_KEY_FILE=/etc/asterisk/keys/kyber_private.key
+        - FALCON_KEY_FILE=/etc/asterisk/keys/falcon_private.key
+        - ASTERISK_ARGS=-vvvvv
+      depends_on:
+        mqtt:
+          condition: service_healthy
+        quantum_sip:
+          condition: service_healthy
+      init: true
+      stop_grace_period: 30s
+
+
+  quantum_srtp:
+      <<: *quantum-service-config
+      deploy:
+        resources:
+          limits:
+            cpus: '2'
+            memory: 2G
+          reservations:
+            cpus: '1'
+            memory: 1G
+        restart_policy:
+          condition: on-failure
+          delay: 5s
+          max_attempts: 3
+      healthcheck:
+        test: [ "CMD", "python3", "-c", "import quantum_srtp; print('Health check passed')" ]
+        interval: 15s
+        timeout: 5s
+        retries: 3
+        start_period: 30s
+      volumes:
+        - ./quantum_services:/app/quantum_services
+        - ./certificates:/app/certificates
+        - ./quantum_srtp:/app/quantum_srtp
+        - ./sip_connect:/app/sip_connect
+        - ./sip_connect/tls:/app/sip_connect/tls
+        - ./sip_connect/kyber:/app/sip_connect/kyber
+        - ./sip_connect/PQClean/crypto_sign/falcon-1024/aarch64:/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64
+        - ./keys:/app/keys  # Main keys directory
+        - ./logs:/app/logs
+      environment:
+        - PYTHONPATH=/app
+        - MQTT_BROKER_HOST=mqtt
+        - MQTT_BROKER_PORT=1883
+      depends_on:
+        mqtt:
+          condition: service_healthy
+        quantum_sip:
+          condition: service_healthy
+      command: python quantum_services_init.py
+
+  quantum_mqtt:
+      <<: *quantum-service-config
+      stop_grace_period: 30s
+      init: true
+      deploy:
+        mode: replicated
+        replicas: 2
+        resources:
+          limits:
+            cpus: '2'
+            memory: 2G
+          reservations:
+            cpus: '1'
+            memory: 1G
+        restart_policy:
+          condition: on-failure
+          delay: 5s
+          max_attempts: 3
+      healthcheck:
+        test: [ "CMD", "python3", "-c", "import quantum_mqtt; print('Health check passed')" ]
+        interval: 15s
+        timeout: 5s
+        retries: 3
+        start_period: 30s
+      volumes:
+        - ./quantum_services:/app/quantum_services
+        - ./quantum_mqtt:/app/quantum_mqtt
+        - ./quantum_srtp:/app/quantum_srtp
+        - ./sip_connect:/app/sip_connect
+        - ./sip_connect/tls:/app/sip_connect/tls
+        - ./sip_connect/kyber:/app/sip_connect/kyber
+        - ./sip_connect/PQClean/crypto_sign/falcon-1024/aarch64:/app/sip_connect/PQClean/crypto_sign/falcon-1024/aarch64
+        - ./keys:/app/keys  # Main keys directory
+        - ./logs:/app/logs
+        - ./certificates:/app/certificates
+      command: python quantum_services_init.py
+      environment:
+        - PYTHONPATH=/app
+        - MQTT_BROKER_HOST=mqtt
+        - MQTT_BROKER_PORT=1883
+      depends_on:
+        mqtt:
+          condition: service_healthy
+        quantum_sip:
+          condition: service_healthy
+
+  couchdb:
+      healthcheck:
+        test: [ "CMD", "curl", "-f", "http://localhost:5984" ]
+        interval: 10s
+        timeout: 5s
+        retries: 3
+        start_period: 30s
+      container_name: couchdb
+      hostname: couchdb
+      image: couchdb:3.3
+      platform: linux/arm64
+      ports:
+        - "5984:5984"
+      environment:
+        - COUCHDB_USER=admin
+        - COUCHDB_PASSWORD=adminpw
+      volumes:
+        - ./couchdb/data:/opt/couchdb/data
+      deploy:
+        resources:
+          limits:
+            cpus: '1'
+            memory: 1G
+          reservations:
+            cpus: '0.5'
+            memory: 512M
+      networks:
+        quantum_sip_default:
+          aliases:
+            - couchdb
+
+  # Updated wallet-service with Hedera integration
+  wallet-service:
+    build: ./wallet-service
+    volumes:
+      - ./wallet-keys:/app/keys
+      - ./wallet-logs:/app/logs
+      - ./certificates:/app/certificates
+    environment:
+      - SOLANA_ENDPOINT=https://api.mainnet-beta.solana.com
+      - HEDERA_NETWORK=${HEDERA_NETWORK:-testnet}
+      - HEDERA_ACCOUNT_ID=${HEDERA_ACCOUNT_ID}
+      - HEDERA_PRIVATE_KEY=${HEDERA_PRIVATE_KEY}
+      - DEFAULT_TOPIC_ID=${HEDERA_TOPIC_ID}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - peer0.Hospital_A.example.com
+    networks:
+      - quantum_sip_default
+
+  # New service for Hedera-Fabric bridge
+  hedera-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.hedera-bridge
+    volumes:
+      - ./hedera-bridge:/app/hedera-bridge
+      - ./sip_connect:/app/sip_connect
+      - ./keys:/app/keys
+      - ./logs:/app/logs
+      - ./certificates:/app/certificates
+    environment:
+      - PYTHONPATH=/app:/app/sip_connect
+      - ORG_ID=Hospital_A
+      - WALLET_SERVICE_URL=https://wallet-service:3000
+      - FABRIC_GATEWAY_URL=https://peer0.Hospital_A.example.com:7051
+    healthcheck:
+      test: [ "CMD", "python3", "-c", "import sys; sys.exit(0 if open('/app/logs/hedera_bridge.log').read() else 1)" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      wallet-service:
+        condition: service_healthy
+      peer0.Hospital_A.example.com:
+        condition: service_healthy
+    networks:
+      - quantum_sip_default
+
+  peer0.Hospital_A.example.com:
+    build:
+      context: .
+      dockerfile: Dockerfile.peer
+    healthcheck:
+      test: [ "CMD", "bash", "-c", "curl -s http://localhost:9443/healthz || exit 0" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    container_name: peer0.Hospital_A.example.com
+    image: hyperledger/fabric-peer:3.0.0
+    platform: linux/arm64
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '2'
+          memory: 2G
+    environment:
+      # Core Configuration
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=quantum_sip_default
+      - FABRIC_LOGGING_SPEC=INFO
+
+      # Peer Configuration
+      - CORE_PEER_ID=peer0.Hospital_A.example.com
+      - CORE_PEER_ADDRESS=peer0.Hospital_A.example.com:7051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.Hospital_A.example.com:7052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
+      - CORE_PEER_LOCALMSPID=Hospital_AMSP
+
+      # Gossip Configuration
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.Hospital_A.example.com:7051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.Hospital_A.example.com:7051
+      - CORE_PEER_GOSSIP_USELEADERELECTION=true
+      - CORE_PEER_GOSSIP_ORGLEADER=false
+
+      # Database Configuration
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+
+      # TLS Configuration
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+
+      # Chaincode Configuration
+      - CORE_CHAINCODE_BUILDER=hyperledger/fabric-ccenv:3.0.0
+      - CORE_CHAINCODE_GOLANG_RUNTIME=hyperledger/fabric-baseos:3.0.0
+      - CORE_CHAINCODE_JAVA_RUNTIME=hyperledger/fabric-javaenv:3.0.0
+      - CORE_CHAINCODE_NODE_RUNTIME=hyperledger/fabric-nodeenv:3.0.0
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+
+      # Operations Configuration
+      - CORE_OPERATIONS_LISTENADDRESS=0.0.0.0:9443
+      - CORE_METRICS_PROVIDER=prometheus
+      - CORE_OPERATIONS_TLS_ENABLED=false
+
+      # Quantum MSP Configuration
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_PEER_QUANTUM_ENABLED=true
+      - CORE_PEER_QUANTUM_KEYSTORE=/etc/hyperledger/fabric/quantum_keys
+      - CORE_PEER_QUANTUM_KEYTYPES=["Falcon","Kyber"]
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./keys:/etc/hyperledger/fabric/quantum_keys
+      - ./crypto-config/peerOrganizations/Hospital_A.example.com/peers/peer0.Hospital_A.example.com/msp:/etc/hyperledger/fabric/msp
+      - ./crypto-config/peerOrganizations/Hospital_A.example.com/peers/peer0.Hospital_A.example.com/tls:/etc/hyperledger/fabric/tls
+      - ./crypto-config/peerOrganizations/Hospital_A.example.com/peers/peer0.Hospital_A.example.com/quantum_keys:/etc/hyperledger/fabric/quantum_keys
+#      - ./crypto-config/peerOrganizations/Hospital_A.example.com/peers/peer0.Hospital_A.example.com/core.yaml:/etc/hyperledger/fabric/core.yaml
+      - peer0_Hospital_A:/var/hyperledger/production
+    user: root
+    ports:
+      - "7051:7051"
+      - "9444:9443"
+    depends_on:
+      - couchdb
+    networks:
+      - quantum_sip_default
+    dns:
+      - 8.8.8.8  # Google DNS
+      - 1.1.1.1  # Cloudflare DNS
+    dns_search:
+      - Hospital_A.example.com
+      - example.com
+    extra_hosts:
+      - "peer0.Hospital_B.example.com:${HOSPITAL_B_IP:-172.18.0.1}"
+      - "orderer.example.com:${ORDERER_IP:-172.18.0.1}"
+
+  peer0.Hospital_B.example.com:
+    build:
+      context: .
+      dockerfile: Dockerfile.peer
+    healthcheck:
+      test: [ "CMD", "bash", "-c", "curl -s http://localhost:9443/healthz || exit 0" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    container_name: peer0.Hospital_B.example.com
+    image: hyperledger/fabric-peer:3.0.0
+    platform: linux/arm64
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '2'
+          memory: 2G
+    environment:
+      # Core Configuration
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=quantum_sip_default
+      - FABRIC_LOGGING_SPEC=INFO
+
+      # Peer Configuration
+      - CORE_PEER_ID=peer0.Hospital_B.example.com
+      - CORE_PEER_ADDRESS=peer0.Hospital_B.example.com:7061
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7061
+      - CORE_PEER_CHAINCODEADDRESS=peer0.Hospital_B.example.com:7062
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7062
+      - CORE_PEER_LOCALMSPID=Hospital_BMSP
+
+      # Gossip Configuration
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.Hospital_B.example.com:7061
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.Hospital_B.example.com:7061
+      - CORE_PEER_GOSSIP_USELEADERELECTION=true
+      - CORE_PEER_GOSSIP_ORGLEADER=false
+
+      # Database Configuration
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+
+      # TLS Configuration
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+
+      # Chaincode Configuration
+      - CORE_CHAINCODE_BUILDER=hyperledger/fabric-ccenv:3.0.0
+      - CORE_CHAINCODE_GOLANG_RUNTIME=hyperledger/fabric-baseos:3.0.0
+      - CORE_CHAINCODE_JAVA_RUNTIME=hyperledger/fabric-javaenv:3.0.0
+      - CORE_CHAINCODE_NODE_RUNTIME=hyperledger/fabric-nodeenv:3.0.0
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+
+      # Operations Configuration
+      - CORE_OPERATIONS_LISTENADDRESS=0.0.0.0:9444  # Different port from Hospital A
+      - CORE_METRICS_PROVIDER=prometheus
+      - CORE_OPERATIONS_TLS_ENABLED=false
+
+      # Quantum MSP Configuration
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_PEER_QUANTUM_ENABLED=true
+      - CORE_PEER_QUANTUM_KEYSTORE=/etc/hyperledger/fabric/quantum_keys
+      - CORE_PEER_QUANTUM_KEYTYPES=["Falcon","Kyber"]
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./keys:/etc/hyperledger/fabric/quantum_keys
+      - ./crypto-config/peerOrganizations/Hospital_B.example.com/peers/peer0.Hospital_B.example.com/msp:/etc/hyperledger/fabric/msp
+      - ./crypto-config/peerOrganizations/Hospital_B.example.com/peers/peer0.Hospital_B.example.com/tls:/etc/hyperledger/fabric/tls
+      - ./crypto-config/peerOrganizations/Hospital_B.example.com/peers/peer0.Hospital_B.example.com/quantum_keys:/etc/hyperledger/fabric/quantum_keys
+#      - ./crypto-config/peerOrganizations/Hospital_B.example.com/peers/peer0.Hospital_B.example.com/core.yaml:/etc/hyperledger/fabric/core.yaml
+      - peer0_Hospital_B:/var/hyperledger/production
+    user: root
+    ports:
+      - "7061:7061"
+      - "9445:9444"
+    depends_on:
+      - couchdb
+    networks:
+      quantum_sip_default:
+        aliases:
+          - peer0.Hospital_B.example.com
+          - Hospital_B.example.com
+          - hospital_b
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    dns_search:
+      - Hospital_B.example.com
+      - example.com
+    extra_hosts:
+      - "peer0.Hospital_A.example.com:${HOSPITAL_A_IP:-172.18.0.1}"
+      - "orderer.example.com:${ORDERER_IP:-172.18.0.1}"
+
+  orderer.example.com:
+    container_name: orderer.example.com
+    image: hyperledger/fabric-orderer:3.0.0
+    platform: linux/arm64
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    environment:
+      # Core Configuration
+      - FABRIC_LOGGING_SPEC=DEBUG  # Change from INFO to DEBUG
+      - ORDERER_GENERAL_LISTENADDRESS=0.0.0.0
+      - ORDERER_GENERAL_LISTENPORT=7050
+      - ORDERER_GENERAL_LOCALMSPID=OrdererMSP
+      - ORDERER_GENERAL_LOCALMSPDIR=/var/hyperledger/orderer/msp
+
+      # Genesis Block Configuration
+      - ORDERER_GENERAL_BOOTSTRAPMETHOD=none
+      - ORDERER_CHANNELPARTICIPATION_ENABLED=true
+      - ORDERER_ADMIN_LISTENADDRESS=0.0.0.0:9443
+
+      # TLS Configuration - Enhanced with Quantum Security
+      - ORDERER_GENERAL_TLS_ENABLED=true
+      - ORDERER_GENERAL_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_TLS_CLIENTAUTHREQUIRED=true
+
+      # Cluster Configuration
+      - ORDERER_GENERAL_CLUSTER_CLIENTCERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_CLUSTER_CLIENTPRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_CLUSTER_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_CLUSTER_SENDBUFFERSIZE=10
+
+      # Operations and Metrics
+      - ORDERER_OPERATIONS_LISTENADDRESS=0.0.0.0:8443
+      - ORDERER_METRICS_PROVIDER=prometheus
+      - ORDERER_OPERATIONS_TLS_ENABLED=true
+      - ORDERER_OPERATIONS_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_OPERATIONS_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+
+      # Consensus Configuration
+      - ORDERER_CONSENSUS_TYPE=etcdraft
+      - ORDERER_CONSENSUS_WALDIR=/var/hyperledger/production/orderer/etcdraft/wal
+      - ORDERER_CONSENSUS_SNAPDIR=/var/hyperledger/production/orderer/etcdraft/snapshot
+      - ORDERER_CONSENSUS_SNAPSHOTINTERVAL=10000
+
+      # Channel Participation
+      - ORDERER_CHANNELPARTICIPATION_ENABLED=true
+      - ORDERER_ADMIN_TLS_ENABLED=true
+      - ORDERER_ADMIN_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_ADMIN_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_ADMIN_TLS_CLIENTROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_ADMIN_TLS_CLIENTCERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_ADMIN_TLS_CLIENTKEY=/var/hyperledger/orderer/tls/server.key
+
+      # Quantum Configuration - Required for PQC integration
+      - ORDERER_GENERAL_QUANTUM_ENABLED=true
+      - ORDERER_GENERAL_QUANTUM_KEYSTORE=/var/hyperledger/orderer/quantum_keys
+      - ORDERER_GENERAL_QUANTUM_KEYTYPES=["Falcon","Kyber"]
+      - ORDERER_GENERAL_QUANTUM_ALGORITHMS=["Falcon-1024","Kyber-512"]
+      - ORDERER_GENERAL_QUANTUM_SIGNATURE=Falcon
+      - ORDERER_GENERAL_QUANTUM_KEYEXCHANGE=Kyber
+
+    volumes:
+      - ./keys:/var/hyperledger/orderer/quantum_keys
+      - ./crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/msp:/var/hyperledger/orderer/msp
+      - ./crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls:/var/hyperledger/orderer/tls
+      - ./orderer.example.com:/var/hyperledger/production/orderer
+      - ./crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/quantum_keys:/var/hyperledger/orderer/quantum_keys
+      # If you need peer organization certs for admin purposes, mount them to admincerts instead:
+      - ./crypto-config/peerOrganizations/Hospital_A.example.com/msp/signcerts/:/var/hyperledger/orderer/msp/admincerts/Hospital_A/
+      - ./crypto-config/peerOrganizations/Hospital_B.example.com/msp/signcerts/:/var/hyperledger/orderer/msp/admincerts/Hospital_B/
+    ports:
+      - "7050:7050"
+      - "8443:8443"
+      - "9443:9443"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "--insecure", "https://localhost:8443/healthz" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      - couchdb
+    networks:
+      - quantum_sip_default
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    dns_search:
+      - example.com
+    extra_hosts:
+      - "peer0.Hospital_A.example.com:${HOSPITAL_A_IP:-172.18.0.1}"
+      - "peer0.Hospital_B.example.com:${HOSPITAL_B_IP:-172.18.0.1}"
+
+  cli:
+    container_name: cli
+    build:
+      context: .
+      dockerfile: Dockerfile.cli
+    platform: linux/arm64
+    tty: true
+    stdin_open: true
+    environment:
+      - GOPATH=/opt/gopath
+      - PYTHONPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_PEER_ID=cli
+      - CORE_PEER_ADDRESS=peer0.Hospital_A.example.com:7051
+      - CORE_PEER_LOCALMSPID=Org1MSP
+      - CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/Hospital_B.example.com/msp
+      - CORE_CHAINCODE_KEEPALIVE=10
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
+    command: /bin/bash -c "chmod +x /entrypoint.sh && /entrypoint.sh"
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./entrypoint.sh:/entrypoint.sh
+      - ./chaincode:/opt/gopath/src/github.com/hyperledger/fabric/peer/chaincode
+      - ./crypto-config:/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/
+      - ./crypto-config.yaml:/etc/hyperledger/fabric/crypto-config.yaml
+      - ./sip_connect:/opt/gopath/src/github.com/hyperledger/fabric/peer/sip_connect
+      - ./quantum_cryptogen.py:/opt/gopath/src/github.com/hyperledger/fabric/peer/quantum_cryptogen.py
+      - ./quantum_keys:/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto-config
+      - ./config:/etc/hyperledger/fabric/config
+
+  minio:
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    image: minio/minio
+    platform: linux/arm64
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - ./minio-data:/data
+    command: server /data --console-address ":9001"
+
+  timescaledb:
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    image: timescale/timescaledb:latest-pg15
+    platform: linux/arm64
+    container_name: timescaledb
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=sensordatapassword
+      - POSTGRES_DB=sensordb
+    volumes:
+      - ./timescaledb-data:/var/lib/postgresql/data
+
+  mqtt:
+    image: eclipse-mosquitto
+    platform: linux/arm64
+    ports:
+      - "1883:1883"  # MQTT primary port
+      - "9883:9883"  # MQTT over WebSocket
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: [ "CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 | grep -v Error || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Libp2p Bridge Configuration for Hospital A and B Integration
+  # This file updates the libp2p-bridge section in docker-compose.yml
+
+  libp2p-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.libp2p
+    volumes:
+      - ./libp2p:/app/libp2p
+      - ./sip_connect:/app/sip_connect
+      - ./keys:/app/keys
+      - ./logs:/app/logs
+      - ./certificates:/app/certificates
+    ports:
+      - "4001:4001"
+      - "8085:8085"
+    environment:
+      - PYTHONPATH=/app:/app/sip_connect
+      - ORG_ID=Hospital_A
+      # Fixed peer address format with correct port
+      - PEER_ADDRESSES=peer0.Hospital_B.example.com:7061
+      - FABRIC_GATEWAY_URL=https://peer0.Hospital_A.example.com:7051
+      - USE_TLS=true
+      # Additional configuration for more reliable connections
+      - LIBP2P_BOOTSTRAP_PEERS=/ip4/peer0.Hospital_B.example.com/tcp/7061
+      - LIBP2P_CONNECTION_TIMEOUT=30000
+      - LIBP2P_CONNECTION_MANAGER_LOW_WATER=5
+      - LIBP2P_CONNECTION_MANAGER_HIGH_WATER=20
+      - QUANTUM_ENHANCED_P2P=true
+      - DEBUG_LEVEL=DEBUG
+      - TLS_CERT_PATH=/app/certificates/Hospital_A_Secure_Communications_certificate.pem
+      - TLS_KEY_PATH=/app/certificates/Hospital_A_Secure_Communications_private_key.pem
+      - TLS_CA_PATH=/app/certificates/ca.pem
+      - RETRY_INTERVAL=5
+      - MAX_RETRIES=10
+    networks:
+      - quantum_sip_default
+    healthcheck:
+      test: [ "CMD", "python3", "-c", "import requests; requests.get('https://localhost:8085/health', verify=False)" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      peer0.Hospital_A.example.com:
+        condition: service_healthy
+      peer0.Hospital_B.example.com:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  orderer.example.com:
+  quantum_keys:
+    driver: local
+  couchdb:
+    driver: local
+  minio-data:
+    driver: local
+  timescaledb-data:
+    driver: local
+  peer0_Hospital_A:
+  peer0_Hospital_B:
+
+
+networks:
+  quantum_sip_default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16  # Use a different subnet
+          gateway: 172.25.0.1

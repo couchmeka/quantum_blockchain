@@ -1,0 +1,8 @@
+General:
+  QuantumEnabled: true
+  QuantumKeyStore: /var/hyperledger/orderer/quantum_keys
+  QuantumKeyTypes:
+    - Falcon
+    - Kyber
+  QuantumSignature: Falcon
+  QuantumKeyExchange: Kyber

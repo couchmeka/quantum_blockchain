@@ -1,0 +1,108 @@
+Organizations:
+  - &Hospital_A
+    Name: Hospital_A
+    ID: Hospital_AMSP
+    MSPDir: crypto-config/peerOrganizations/Hospital_A.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('Hospital_AMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('Hospital_AMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('Hospital_AMSP.admin')"
+    OrdererEndpoints:
+      - orderer.example.com:7050
+    AnchorPeers:
+      - Host: peer0.Hospital_A.example.com
+        Port: 7051
+    QuantumMSP:
+      Enabled: true
+      Type: falcon
+      KeyStore: quantum_keys
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_0: true
+
+Application: &ApplicationDefaults
+    Organizations:
+    Policies:
+        Readers:
+            Type: ImplicitMeta
+            Rule: "ANY Readers"
+        Writers:
+            Type: ImplicitMeta
+            Rule: "ANY Writers"
+        Admins:
+            Type: ImplicitMeta
+            Rule: "MAJORITY Admins"
+    Capabilities:
+        <<: *ApplicationCapabilities
+
+Orderer: &OrdererDefaults
+    OrdererType: etcdraft
+    Capabilities:
+        <<: *OrdererCapabilities
+
+Channel: &ChannelDefaults
+    Policies:
+        Readers:
+            Type: ImplicitMeta
+            Rule: "ANY Readers"
+        Writers:
+            Type: ImplicitMeta
+            Rule: "ANY Writers"
+        Admins:
+            Type: ImplicitMeta
+            Rule: "MAJORITY Admins"
+    Capabilities:
+        <<: *ChannelCapabilities
+
+Profiles:
+    TwoOrgsOrdererGenesis:
+        <<: *ChannelDefaults
+        Orderer:
+            <<: *OrdererDefaults
+            Organizations:
+                - *Hospital_A
+            Policies:
+                Readers:
+                    Type: ImplicitMeta
+                    Rule: "ANY Readers"
+                Writers:
+                    Type: ImplicitMeta
+                    Rule: "ANY Writers"
+                Admins:
+                    Type: ImplicitMeta
+                    Rule: "MAJORITY Admins"
+        Consortiums:
+            SampleConsortium:
+                Organizations:
+                    - *Hospital_A
+    
+    TwoOrgsChannel:
+        Consortium: SampleConsortium
+        <<: *ChannelDefaults
+        Application:
+            <<: *ApplicationDefaults
+            Organizations:
+                - *Hospital_A
+            Policies:
+                Readers:
+                    Type: ImplicitMeta
+                    Rule: "ANY Readers"
+                Writers:
+                    Type: ImplicitMeta
+                    Rule: "ANY Writers"
+                Admins:
+                    Type: ImplicitMeta
+                    Rule: "MAJORITY Admins"
+            Capabilities:
+                <<: *ApplicationCapabilities

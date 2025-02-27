@@ -1,0 +1,120 @@
+OrdererOrgs:
+  - Name: Orderer
+    Domain: example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - orderer.example.com
+    QuantumExtensions:
+      Enable: true
+      KeyTypes:
+        - Falcon
+        - Kyber
+      KeyStore: quantum_keys
+      AsteriskConfig:
+        Enable: true
+        ListenPort: 5060
+        TLSPort: 5061
+
+PeerOrgs:
+  - Name: Hospital_A
+    Domain: Hospital_A.example.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      SANS:
+        - localhost
+    Users:
+      Count: 1
+    QuantumExtensions:
+      Enable: true
+      KeyTypes:
+        - Falcon
+        - Kyber
+      KeyStore: quantum_keys
+      AsteriskConfig:
+        Enable: true
+        SIPEndpoint:
+          Host: peer0.Hospital_A.example.com
+          Port: 5061
+          Transport: TLS
+        QuantumSRTP:
+          Enable: true
+          KeyRotationInterval: 3600
+        Communications:
+          AllowedPeers:
+            - Hospital_B.example.com
+          EncryptionProtocols:
+            - QSRTP
+            - QMQTT
+          CertificatePath: /etc/asterisk/certs/Hospital_A
+          KeyPath: /etc/asterisk/keys/Hospital_A
+
+  - Name: Hospital_B
+    Domain: Hospital_B.example.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      SANS:
+        - localhost
+    Users:
+      Count: 1
+    QuantumExtensions:
+      Enable: true
+      KeyTypes:
+        - Falcon
+        - Kyber
+      KeyStore: quantum_keys
+      AsteriskConfig:
+        Enable: true
+        SIPEndpoint:
+          Host: peer0.Hospital_B.example.com
+          Port: 5061
+          Transport: TLS
+        QuantumSRTP:
+          Enable: true
+          KeyRotationInterval: 3600
+        Communications:
+          AllowedPeers:
+            - Hospital_A.example.com
+          EncryptionProtocols:
+            - QSRTP
+            - QMQTT
+          CertificatePath: /etc/asterisk/certs/Hospital_B
+          KeyPath: /etc/asterisk/keys/Hospital_B
+
+NodeOUs:
+  Enable: true
+  ClientOUIdentifier:
+    Certificate: cacerts/ca.${ORG:-example.com}-cert.pem
+    OrganizationalUnitIdentifier: client
+  PeerOUIdentifier:
+    Certificate: cacerts/ca.${ORG:-example.com}-cert.pem
+    OrganizationalUnitIdentifier: peer
+  AdminOUIdentifier:
+    Certificate: cacerts/ca.${ORG:-example.com}-cert.pem
+    OrganizationalUnitIdentifier: admin
+  OrdererOUIdentifier:
+    Certificate: cacerts/ca.${ORG:-example.com}-cert.pem
+    OrganizationalUnitIdentifier: orderer
+
+SecurityConfig:
+  DefaultKeyStore: quantum_keys
+  QuantumResistance:
+    Enable: true
+    MinimumSecurityLevel: 5
+    PreferredAlgorithms:
+      - Falcon
+      - Kyber
+  CommunicationProtocols:
+    - TLS
+    - QSRTP
+    - QMQTT
+  CertificateAuthority:
+    ValidityPeriod: 365d
+    KeyUsage:
+      - digital_signature
+      - key_encipherment
+      - quantum_resistant_signature

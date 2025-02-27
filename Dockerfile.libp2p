@@ -1,0 +1,29 @@
+# In Dockerfile.libp2p
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    make \
+    curl \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/keys
+
+# Copy application code
+COPY ./libp2p /app/libp2p
+COPY ./sip_connect /app/sip_connect
+
+# Default command
+CMD ["python", "-m", "libp2p.libp2p_bridge"]

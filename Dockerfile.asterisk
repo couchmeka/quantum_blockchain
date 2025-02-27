@@ -1,0 +1,192 @@
+# Build stage
+FROM debian:bullseye-slim AS builder
+
+# Install essential build dependencies
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    build-essential \
+    wget \
+    gcc \
+    g++ \
+    make \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    libssl-dev \
+    libxml2-dev \
+    libsqlite3-dev \
+    libsrtp2-dev \
+    python3-dev \
+    libedit-dev \
+    bison \
+    flex \
+    libncurses5-dev \
+    libjansson-dev \
+    git \
+    subversion \
+    libcurl4-openssl-dev \
+    uuid-dev \
+    zlib1g-dev \
+    libspeex-dev \
+    libspeexdsp-dev \
+    python3-pip \
+    sqlite3 \
+    liblzma-dev \
+    libicu-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and extract Asterisk
+WORKDIR /usr/src
+RUN wget http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-20-current.tar.gz && \
+    tar xf asterisk-20-current.tar.gz && \
+    rm asterisk-20-current.tar.gz && \
+    mv asterisk-* asterisk
+
+# Now we can work in the Asterisk directory
+WORKDIR /usr/src/asterisk
+
+# Run bootstrap script
+RUN ./bootstrap.sh || (echo "Bootstrap failed" && exit 1)
+
+# Configure with detailed options - explicitly enable SSL modules and specify ARM64 architecture
+RUN ./configure \
+    --with-ssl=ssl \
+    --with-crypto \
+    --with-srtp \
+    --with-uuid \
+    --with-sqlite3 \
+    --with-speex \
+    --with-speexdsp \
+    --disable-static \
+    --enable-shared \
+    --host=aarch64-linux-gnu \
+    --verbose || (cat config.log && exit 1)
+
+# Generate menuselect-tree file first
+RUN make menuselect-tree
+
+# Run make menuselect
+RUN cd menuselect && \
+    make menuselect && \
+    cd .. && \
+    menuselect/menuselect --enable res_crypto --enable res_srtp --enable CORE-SOUNDS-EN-GSM menuselect.makeopts
+
+# Build and install Asterisk
+RUN make -j$(nproc) && make install && make samples && make config
+
+# Create asterisk_modules directory and copy the module source
+WORKDIR /usr/src/asterisk_modules
+COPY asterisk_modules/res_quantum /usr/src/asterisk_modules/res_quantum
+
+# Set up build environment for res_quantum
+WORKDIR /usr/src/asterisk_modules/res_quantum
+
+# Compile the res_quantum module with clear verbose output
+RUN echo "Building res_quantum module..." && \
+    gcc -Wall -Wextra -fPIC -g -O2 -o res_quantum.so res_quantum.c \
+        -I/usr/src/asterisk/include -D_GNU_SOURCE \
+        -DAST_MODULE_SELF_SYM=__internal_res_quantum_self \
+        -DAST_MODULE=\"res_quantum\" -shared && \
+    ls -la res_quantum.so && \
+    cp res_quantum.so /usr/lib/asterisk/modules/ && \
+    chmod 644 /usr/lib/asterisk/modules/res_quantum.so && \
+    echo "Module built and installed successfully"
+
+# THIS IS THE IMPORTANT FIX - PREPARE ASTERISK LIBS IN THE BUILDER STAGE
+RUN mkdir -p /tmp/asterisk-libs && \
+    if [ -d /usr/lib/asterisk ]; then \
+        cp -r /usr/lib/asterisk* /tmp/asterisk-libs/ || echo "Warning: No asterisk libs found in /usr/lib"; \
+    fi
+RUN if [ -d /usr/local/lib/asterisk ]; then \
+        cp -r /usr/local/lib/asterisk* /tmp/asterisk-libs/ || echo "Warning: No asterisk libs found in /usr/local/lib"; \
+    fi
+
+# List the directories to debug
+RUN ls -la /usr/lib/ /usr/local/lib/ /tmp/asterisk-libs/ || true
+
+# Final stage
+FROM debian:bullseye-slim
+
+RUN apt-get update && apt-get install -y \
+    libssl1.1 \
+    libxml2 \
+    libsqlite3-0 \
+    libsrtp2-1 \
+    libedit2 \
+    python3 \
+    libjansson4 \
+    uuid-runtime \
+    libspeex1 \
+    libspeexdsp1 \
+    libicu67 \
+    net-tools \
+    procps \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy compiled files from builder
+COPY --from=builder /usr/lib/asterisk /usr/lib/asterisk
+COPY --from=builder /usr/sbin/asterisk /usr/sbin/
+COPY --from=builder /etc/asterisk /etc/asterisk
+COPY --from=builder /var/lib/asterisk /var/lib/asterisk
+COPY --from=builder /var/spool/asterisk /var/spool/asterisk
+COPY --from=builder /tmp/asterisk-libs /usr/lib/
+COPY --from=builder /usr/src/asterisk_modules/res_quantum/res_quantum.so /usr/lib/asterisk/modules/
+
+# Create SSL library symlinks if needed
+RUN mkdir -p /usr/lib && \
+    if [ ! -f /usr/lib/libasteriskssl.so.1 ] && [ -f /usr/lib/libssl.so.1.1 ]; then \
+        ln -sf /usr/lib/libssl.so.1.1 /usr/lib/libasteriskssl.so.1; \
+    fi && \
+    ldconfig
+
+# Verify the module was copied correctly
+RUN ls -la /usr/lib/asterisk/modules/res_quantum.so || echo "Module not found"
+
+# Create required directories with appropriate permissions
+RUN groupadd -r asterisk && useradd -r -g asterisk asterisk \
+    && mkdir -p /var/log/asterisk /var/run/asterisk /etc/asterisk/keys /etc/asterisk/certs \
+    && touch /var/log/asterisk/messages /var/log/asterisk/full \
+    && chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk \
+    && chmod -R 750 /etc/asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk \
+    && chmod 660 /var/log/asterisk/messages /var/log/asterisk/full
+
+# Create sample quantum.conf if it doesn't exist
+RUN if [ ! -f /etc/asterisk/quantum.conf ]; then \
+    echo "[general]" > /etc/asterisk/quantum.conf && \
+    echo "quantum_enabled=yes" >> /etc/asterisk/quantum.conf && \
+    echo "org_id=Hospital_A" >> /etc/asterisk/quantum.conf && \
+    echo "key_store=/etc/asterisk/keys" >> /etc/asterisk/quantum.conf && \
+    echo "" >> /etc/asterisk/quantum.conf && \
+    echo "[quantum_keys]" >> /etc/asterisk/quantum.conf && \
+    echo "falcon_public_key=Hospital_A_falcon_public.pem" >> /etc/asterisk/quantum.conf && \
+    echo "falcon_private_key=Hospital_A_falcon_private.pem" >> /etc/asterisk/quantum.conf && \
+    echo "kyber_public_key=Hospital_A_kyber_public.pem" >> /etc/asterisk/quantum.conf && \
+    echo "kyber_private_key=Hospital_A_kyber_private.pem" >> /etc/asterisk/quantum.conf && \
+    echo "" >> /etc/asterisk/quantum.conf && \
+    echo "[security]" >> /etc/asterisk/quantum.conf && \
+    echo "refresh_interval=3600" >> /etc/asterisk/quantum.conf && \
+    echo "key_rotation_enabled=yes" >> /etc/asterisk/quantum.conf; \
+fi
+
+# Update modules.conf to load our module
+RUN if ! grep -q "res_quantum.so" /etc/asterisk/modules.conf; then \
+        echo "load => res_quantum.so" >> /etc/asterisk/modules.conf; \
+    fi
+
+# Expose ports
+EXPOSE 5060/udp 5061-5062/tcp 8088-8089/tcp 10000-20000/udp
+
+# Set working directory
+WORKDIR /app
+
+# Copy entrypoint script
+COPY entrypoint_asterisk.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint_asterisk.sh
+
+# Use the entrypoint directly
+ENTRYPOINT ["/usr/local/bin/entrypoint_asterisk.sh"]
+
+STOPSIGNAL SIGTERM
